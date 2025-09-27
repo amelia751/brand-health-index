@@ -1,0 +1,7 @@
+brand_id,brand_name,aliases,domains,ticker,hq_country
+jpm,"JPMorgan Chase","[""JPMorgan"", ""Chase Bank"", ""Chase""]","[""chase.com"", ""jpmorgan.com""]",JPM,US
+wf,"Wells Fargo","[""Wells Fargo Bank"", ""WF""]","[""wellsfargo.com""]",WFC,US
+bac,"Bank of America","[""BofA"", ""Bank of America Corporation""]","[""bankofamerica.com""]",BAC,US
+c,"Citibank","[""Citi"", ""Citigroup"", ""Citicorp""]","[""citi.com"", ""citibank.com""]",C,US
+gs,"Goldman Sachs","[""Goldman"", ""GS""]","[""goldmansachs.com""]",GS,US
+ms,"Morgan Stanley","[""MS""]","[""morganstanley.com""]",MS,US

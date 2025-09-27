@@ -1,0 +1,15 @@
+# Copy this file to terraform.tfvars and fill in your values
+
+# GCP Project Configuration
+project_id = "your-gcp-project-id"
+region     = "us-central1"
+environment = "dev"  # or "prod"
+
+# Storage Configuration
+brand_health_bucket_name = "your-unique-bucket-name-brand-health-raw-data"
+
+# Example values:
+# project_id = "brand-health-analytics-123"
+# region     = "us-central1" 
+# environment = "dev"
+# brand_health_bucket_name = "brand-health-raw-data-dev-20241201"

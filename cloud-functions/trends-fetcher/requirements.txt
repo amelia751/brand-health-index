@@ -1,0 +1,6 @@
+functions-framework==3.4.0
+google-cloud-storage==2.10.0
+pytrends==4.9.2
+pandas==2.1.4
+numpy==1.26.4
+flask==2.3.3

@@ -1,0 +1,76 @@
+version: 2
+
+models:
+  - name: brand_daily_bhi
+    description: Daily Brand Health Index scores and component analysis
+    columns:
+      - name: brand_id
+        description: Brand identifier
+        tests:
+          - not_null
+      - name: brand_name
+        description: Human-readable brand name
+        tests:
+          - not_null
+      - name: date
+        description: Date of the BHI calculation
+        tests:
+          - not_null
+      - name: country
+        description: Country/region code
+        tests:
+          - not_null
+      - name: bhi_score
+        description: Overall Brand Health Index score (0-100)
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: bhi_rank
+        description: Rank among peers for the same date/country
+        tests:
+          - not_null
+      - name: social_score
+        description: Social media sentiment component score (0-100)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: search_score
+        description: Search visibility component score (0-100)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: complaints_score
+        description: Consumer complaints component score (0-100)
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+      - name: risk_category
+        description: Risk assessment based on BHI score
+        tests:
+          - accepted_values:
+              values: ['Healthy', 'Low Risk', 'Medium Risk', 'High Risk']
+      - name: trend_direction
+        description: 7-day trend direction
+        tests:
+          - accepted_values:
+              values: ['Improving', 'Stable', 'Declining']
+      - name: calc_version
+        description: Calculation methodology version
+        tests:
+          - not_null
+      - name: updated_at
+        description: Timestamp when record was last updated
+        tests:
+          - not_null
+    
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - brand_id
+            - date
+            - country

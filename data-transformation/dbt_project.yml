@@ -1,0 +1,75 @@
+name: 'brand_health_index'
+version: '1.0.0'
+config-version: 2
+
+# This setting configures which "profile" dbt uses for this project.
+profile: 'brand_health_index'
+
+# These configurations specify where dbt should look for different types of files.
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Configuring models
+models:
+  brand_health_index:
+    # Raw data models - materialized as views for efficiency
+    raw:
+      +materialized: view
+      +schema: raw
+    
+    # Staging models - light transformations, materialized as views
+    staging:
+      +materialized: view
+      +schema: staging
+    
+    # Marts - business logic, materialized as tables
+    marts:
+      +materialized: table
+      +schema: marts
+      
+    # BHI models - core business metrics, materialized as tables
+    bhi:
+      +materialized: table
+      +schema: bhi
+
+# Variables for configuration
+vars:
+  # Brand mapping 
+  financial_brands:
+    jpm: "JPMorgan Chase"
+    wf: "Wells Fargo"
+    bac: "Bank of America"
+    c: "Citibank"
+    gs: "Goldman Sachs"
+    ms: "Morgan Stanley"
+    td: "TD Bank"  
+  
+  # BHI component weights
+  bhi_weights:
+    social: 0.30
+    search: 0.20
+    complaints: 0.25
+    reviews_customer: 0.15
+    reviews_employee: 0.10
+  
+  # Date range for analysis (can be overridden)
+  start_date: '2023-01-01'
+  end_date: '{{ "now" | as_text }}'
+
+# Seeds configuration
+seeds:
+  brand_health_index:
+    +schema: reference
+    brand_dictionary:
+      +column_types:
+        brand_id: string
+        brand_name: string

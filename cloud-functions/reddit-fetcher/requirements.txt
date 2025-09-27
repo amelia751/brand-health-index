@@ -1,0 +1,5 @@
+functions-framework==3.4.0
+google-cloud-storage==2.10.0
+google-cloud-secret-manager==2.16.4
+praw==7.7.1
+flask==2.3.3

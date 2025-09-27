@@ -1,0 +1,102 @@
+version: 2
+
+sources:
+  - name: fivetran_raw
+    description: Raw data ingested by Fivetran from various APIs
+    database: "{{ env_var('DBT_GOOGLE_BIGQUERY_PROJECT') }}"
+    schema: fivetran_raw
+    
+    tables:
+      - name: twitter_posts
+        description: Raw Twitter posts data
+        columns:
+          - name: brand_id
+            description: Brand identifier
+            tests:
+              - not_null
+          - name: tweet_id
+            description: Unique tweet identifier
+            tests:
+              - not_null
+              - unique
+          - name: ts_event
+            description: Tweet creation timestamp
+            tests:
+              - not_null
+          - name: text
+            description: Tweet content
+            tests:
+              - not_null
+          - name: collected_at
+            description: Data collection timestamp
+            tests:
+              - not_null
+              
+      - name: reddit_messages
+        description: Raw Reddit posts and comments data
+        columns:
+          - name: brand_id
+            description: Brand identifier
+            tests:
+              - not_null
+          - name: reddit_id
+            description: Unique Reddit post/comment identifier
+            tests:
+              - not_null
+              - unique
+          - name: ts_event
+            description: Post/comment creation timestamp
+            tests:
+              - not_null
+          - name: type
+            description: Message type (post or comment)
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['post', 'comment']
+                  
+      - name: trends_timeseries
+        description: Raw Google Trends data
+        columns:
+          - name: brand_id
+            description: Brand identifier
+            tests:
+              - not_null
+          - name: keyword
+            description: Search keyword
+            tests:
+              - not_null
+          - name: ts_event
+            description: Trend data timestamp
+            tests:
+              - not_null
+          - name: value
+            description: Relative search volume (0-100)
+            tests:
+              - not_null
+              - dbt_utils.accepted_range:
+                  min_value: 0
+                  max_value: 100
+                  
+      - name: cfpb_complaints
+        description: Raw CFPB consumer complaints data
+        columns:
+          - name: brand_id
+            description: Brand identifier
+            tests:
+              - not_null
+          - name: complaint_id
+            description: Unique complaint identifier
+            tests:
+              - not_null
+              - unique
+          - name: ts_event
+            description: Complaint received timestamp
+            tests:
+              - not_null
+          - name: severity_score
+            description: Calculated severity score (0-1)
+            tests:
+              - dbt_utils.accepted_range:
+                  min_value: 0
+                  max_value: 1
