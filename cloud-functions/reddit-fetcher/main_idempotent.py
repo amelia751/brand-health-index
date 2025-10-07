@@ -19,7 +19,6 @@ from google.cloud import storage
 from google.cloud import secretmanager
 from google.cloud import bigquery
 import functions_framework
-import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -369,42 +368,13 @@ class IdempotentRedditFetcher:
             logger.error(f"Error processing comment {comment.id}: {e}")
             return None
     
-    def _enrich_with_nlp(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Enrich messages with NLP analysis using Vertex AI"""
-        if not messages:
-            return messages
-        
-        try:
-            # Import NLP enrichment function
-            from main_nlp import enrich_reddit_records
-            
-            # Process messages with NLP
-            enriched_messages = enrich_reddit_records(messages)
-            logger.info(f"Successfully enriched {len(messages)} messages with NLP analysis")
-            return enriched_messages
-            
-        except Exception as e:
-            logger.error(f"NLP enrichment failed: {e}")
-            # Return original messages with default NLP values
-            for msg in messages:
-                msg.update({
-                    'sentiment': 0.0,
-                    'severity': 0.0,
-                    'topics': [],
-                    'language': 'en',
-                    'nlp_confidence': 0.0,
-                    'nlp_model': 'none',
-                    'nlp_version': 'v1.0',
-                    'nlp_processed_at': datetime.utcnow().isoformat() + 'Z',
-                    'nlp_error': str(e)
-                })
-            return messages
-    
     def save_to_gcs_partitioned(self, messages: List[Dict[str, Any]], run_timestamp: str):
         """Save messages to GCS in partitioned format with gzip compression"""
         if not messages:
             logger.info("No messages to save")
             return
+        
+        # Group messages by date
         messages_by_date = {}
         for msg in messages:
             event_date = msg['ts_event'][:10]  # Extract YYYY-MM-DD
@@ -461,7 +431,6 @@ def fetch_reddit_data_idempotent(request):
         for terms in FINANCIAL_BRANDS.values():
             all_brand_terms.extend(terms)
         
-        # Collect all messages
         all_messages = []
         processed_subreddits = 0
         
@@ -485,12 +454,8 @@ def fetch_reddit_data_idempotent(request):
                 logger.error(f"Error processing subreddit {subreddit_name}: {e}")
                 continue
         
-        # Enrich all messages with NLP analysis
-        logger.info(f"Starting NLP enrichment for {len(all_messages)} messages")
-        enriched_messages = fetcher._enrich_with_nlp(all_messages)
-        
-        # Save enriched data to GCS
-        saved_files = fetcher.save_to_gcs_partitioned(enriched_messages, run_timestamp)
+        # Save to GCS
+        saved_files = fetcher.save_to_gcs_partitioned(all_messages, run_timestamp)
         
         return {
             'status': 'success',

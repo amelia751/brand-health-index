@@ -1,0 +1,43 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "analysis": {
+      "analyzer": {
+        "financial_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "stop", "stemmer"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "event_id": {"type": "keyword"},
+      "brand_id": {"type": "keyword"},
+      "source": {"type": "keyword"},
+      "ts_event": {"type": "date"},
+      "text": {
+        "type": "text", 
+        "analyzer": "financial_analyzer",
+        "fields": {
+          "keyword": {"type": "keyword", "ignore_above": 256}
+        }
+      },
+      "topics": {"type": "keyword"},
+      "sentiment": {"type": "float"},
+      "severity": {"type": "float"},
+      "nlp_confidence": {"type": "float"},
+      "nlp_model": {"type": "keyword"},
+      "geo_country": {"type": "keyword"},
+      "content_hash": {"type": "keyword"},
+      "url": {"type": "keyword"},
+      "subreddit": {"type": "keyword"},
+      "author": {"type": "keyword"},
+      "score": {"type": "integer"},
+      "num_comments": {"type": "integer"},
+      "metadata": {"type": "object", "enabled": false}
+    }
+  }
+}

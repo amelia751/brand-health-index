@@ -1,296 +1,358 @@
 """
-CFPB Consumer Complaints Data Fetcher
-Fetches consumer complaint data from CFPB's Socrata API
+CFPB Complaints Fetcher
+Fetches consumer complaints from CFPB using the same bank aliases as Reddit fetcher
 """
 
 import os
 import json
 import logging
-import time
+import hashlib
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import requests
 from google.cloud import storage
+from google.cloud import secretmanager
+from google.cloud import bigquery
 import functions_framework
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configuration
+# Configuration from environment variables
 PROJECT_ID = os.environ.get('PROJECT_ID')
-BUCKET_NAME = os.environ.get('GCS_BUCKET', 'brand-health-raw-data')
+GCS_BUCKET = os.environ.get('GCS_BUCKET', 'brand-health-raw-data')
+BQ_DATASET = os.environ.get('BQ_DATASET', 'brand_health_raw')
 
-# CFPB API configuration
-CFPB_API_BASE = "https://www.consumerfinance.gov/data-research/consumer-complaints/search/api/v1/"
-
-# Financial institutions mapping (company names as they appear in CFPB data) 
-FINANCIAL_COMPANIES = {
-    'jpm': [
-        'JPMORGAN CHASE & CO.',
-        'JPMORGAN CHASE BANK, N.A.',
-        'CHASE BANK USA, N.A.'
+# CFPB-specific company name mappings (based on ACTUAL CFPB API data)
+CFPB_COMPANY_MAPPING = {
+    'chase': [
+        'JPMORGAN CHASE & CO.'
     ],
-    'wf': [
-        'WELLS FARGO & COMPANY',
-        'WELLS FARGO BANK, N.A.',
-        'WELLS FARGO FINANCIAL NATIONAL BANK'
+    'bank_of_america': [
+        'BANK OF AMERICA, NATIONAL ASSOCIATION'
     ],
-    'bac': [
-        'BANK OF AMERICA, NATIONAL ASSOCIATION',
-        'BANK OF AMERICA CORPORATION',
-        'FIA CARD SERVICES, N.A.'
+    'wells_fargo': [
+        'WELLS FARGO & COMPANY'
     ],
-    'c': [
-        'CITIBANK, N.A.',
-        'CITICORP',
-        'CITIGROUP INC.'
+    'capital_one': [
+        'CAPITAL ONE FINANCIAL CORPORATION'
     ],
-    'gs': [
-        'GOLDMAN SACHS BANK USA',
-        'THE GOLDMAN SACHS GROUP, INC.'
+    'citibank': [
+        'CITIBANK, N.A.'
     ],
-    'ms': [
-        'MORGAN STANLEY & CO. LLC',
-        'MORGAN STANLEY BANK, N.A.',
-        'MORGAN STANLEY'
+    'pnc': [
+        'PNC Bank N.A.'
     ],
-    'td': [
-        'TD BANK US HOLDING COMPANY',
-        'TD BANK, N.A.',
+    'santander': [
+        'SANTANDER BANK, NATIONAL ASSOCIATION',
+        'SANTANDER HOLDINGS USA, INC.'
+    ],
+    # These need to be verified with more CFPB data
+    'td_bank': [
         'TD BANK USA, NATIONAL ASSOCIATION'
+    ],
+    'citizens_bank': [
+        'CITIZENS BANK, NATIONAL ASSOCIATION'
+    ],
+    'mt_bank': [
+        'M&T BANK CORPORATION'
+    ],
+    'keybank': [
+        'KEYBANK NATIONAL ASSOCIATION'
+    ],
+    'regions_bank': [
+        'REGIONS BANK'
+    ],
+    'truist': [
+        'TRUIST BANK'
     ]
 }
 
+# CFPB API Configuration
+CFPB_API_BASE = "https://www.consumerfinance.gov/data-research/consumer-complaints/search/api/v1/"
+
 class CFPBFetcher:
+    """Fetches CFPB complaints data with same brand mapping as Reddit"""
+    
     def __init__(self):
         self.storage_client = storage.Client()
-        self.session = requests.Session()
-        # Set proper headers for CFPB API
-        self.session.headers.update({
-            'User-Agent': 'Brand-Health-Index-Pipeline/1.0 (Consumer Complaint Analysis)',
-            'Accept': 'application/json',
-            'Accept-Encoding': 'gzip, deflate'
-        })
+        self.bq_client = bigquery.Client()
+        self.bucket = self.storage_client.bucket(GCS_BUCKET)
     
-    def fetch_complaints(self, brand_id: str, company_names: List[str], 
-                        date_received_gte: str, limit: int = 1000) -> List[Dict[str, Any]]:
-        """Fetch complaints for specific companies from CFPB API"""
+    def get_brand_id_from_company(self, company_name: str) -> Optional[str]:
+        """Map CFPB company name to our standardized brand_id"""
+        if not company_name:
+            return None
         
-        all_complaints = []
+        # Check exact matches first (case-insensitive)
+        for brand_id, company_names in CFPB_COMPANY_MAPPING.items():
+            for cfpb_name in company_names:
+                if company_name.upper() == cfpb_name.upper():
+                    return brand_id
         
-        for company_name in company_names:
-            try:
-                # Rate limiting to avoid overwhelming CFPB API
-                time.sleep(1.0)  # 1 second delay between requests
+        # Check partial matches as fallback
+        company_upper = company_name.upper()
+        for brand_id, company_names in CFPB_COMPANY_MAPPING.items():
+            for cfpb_name in company_names:
+                if cfpb_name.upper() in company_upper or company_upper in cfpb_name.upper():
+                    return brand_id
+        
+        return None
+    
+    def fetch_cfpb_complaints(self, 
+                            since_date: Optional[str] = None,
+                            limit: int = 1000) -> List[Dict[str, Any]]:
+        """Fetch complaints from CFPB API"""
+        
+        # Default to last 30 days if no date specified
+        if not since_date:
+            since_date = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
+        
+        logger.info(f"Fetching CFPB complaints since {since_date}")
+        
+        # Build API parameters (CFPB API format)
+        params = {
+            'date_received_min': since_date,
+            'size': limit
+        }
+        
+        try:
+            response = requests.get(CFPB_API_BASE, params=params, timeout=30)
+            response.raise_for_status()
+            
+            data = response.json()
+            hits = data.get('hits', {}).get('hits', [])
+            
+            logger.info(f"Retrieved {len(hits)} complaints from CFPB API")
+            
+            # Process and filter for our target banks
+            processed_complaints = []
+            all_companies = set()
+            
+            for hit in hits:
+                source = hit.get('_source', {})
                 
-                # Build query parameters
-                params = {
-                    'company': company_name,
-                    'date_received_gte': date_received_gte,
-                    'size': min(limit, 1000),  # API limit
-                    'sort': 'date_received_desc'
+                # Extract key fields
+                company_name = source.get('company', '')
+                all_companies.add(company_name)
+                brand_id = self.get_brand_id_from_company(company_name)
+                
+                # Log company names for debugging
+                if not brand_id:
+                    logger.info(f"Unmapped company: {company_name}")
+                else:
+                    logger.info(f"Mapped company: {company_name} → {brand_id}")
+                
+                # Only include complaints for our target banks
+                if not brand_id:
+                    continue
+                
+                # Create standardized record
+                complaint = {
+                    'event_id': f"cfpb_{source.get('complaint_id', '')}",
+                    'ts_event': self._parse_date(source.get('date_received')),
+                    'brand_id': brand_id,
+                    'source': 'cfpb',
+                    'geo_country': 'US',
+                    'text': self._build_complaint_text(source),
+                    'content_hash': self._generate_content_hash(source.get('complaint_id', '')),
+                    'metadata': {
+                        'complaint_id': source.get('complaint_id'),
+                        'company': company_name,
+                        'product': source.get('product'),
+                        'issue': source.get('issue'),
+                        'sub_issue': source.get('sub_issue'),
+                        'state': source.get('state'),
+                        'zip_code': source.get('zip_code'),
+                        'submitted_via': source.get('submitted_via'),
+                        'company_response': source.get('company_response_to_consumer'),
+                        'timely_response': source.get('timely_response'),
+                        'consumer_disputed': source.get('consumer_disputed'),
+                        'consumer_consent_provided': source.get('consumer_consent_provided')
+                    },
+                    '_ingested_at': datetime.utcnow().isoformat() + 'Z',
+                    '_source_run': f"cfpb_fetcher_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
                 }
                 
-                logger.info(f"Fetching complaints for {company_name} since {date_received_gte}")
-                response = self.session.get(CFPB_API_BASE, params=params, timeout=30)
-                response.raise_for_status()
-                
-                data = response.json()
-                
-                if 'hits' in data and 'hits' in data['hits']:
-                    for hit in data['hits']['hits']:
-                        complaint = self._process_complaint(hit['_source'], brand_id)
-                        if complaint:
-                            all_complaints.append(complaint)
-                
-                logger.info(f"Fetched {len(data.get('hits', {}).get('hits', []))} complaints for {company_name}")
-                
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Error fetching complaints for {company_name}: {e}")
-                continue
-            except Exception as e:
-                logger.error(f"Unexpected error processing {company_name}: {e}")
-                continue
-        
-        # Remove duplicates based on complaint_id
-        unique_complaints = {}
-        for complaint in all_complaints:
-            complaint_id = complaint['complaint_id']
-            if complaint_id not in unique_complaints:
-                unique_complaints[complaint_id] = complaint
-        
-        final_complaints = list(unique_complaints.values())
-        logger.info(f"Total unique complaints for brand {brand_id}: {len(final_complaints)}")
-        
-        return final_complaints
-    
-    def _process_complaint(self, complaint_data: Dict[str, Any], brand_id: str) -> Optional[Dict[str, Any]]:
-        """Process CFPB complaint into standardized format"""
-        try:
-            # Map CFPB fields to our schema
-            processed = {
-                'brand_id': brand_id,
-                'complaint_id': complaint_data.get('complaint_id'),
-                'ts_event': self._parse_date(complaint_data.get('date_received')),
-                'product': complaint_data.get('product'),
-                'sub_product': complaint_data.get('sub_product'),
-                'issue': complaint_data.get('issue'),
-                'sub_issue': complaint_data.get('sub_issue'),
-                'consumer_complaint_narrative': complaint_data.get('consumer_complaint_narrative'),
-                'company_response_to_consumer': complaint_data.get('company_response_to_consumer'),
-                'timely_response': complaint_data.get('timely_response', '').lower() == 'yes',
-                'consumer_disputed': self._parse_boolean(complaint_data.get('consumer_disputed')),
-                'submitted_via': complaint_data.get('submitted_via'),
-                'date_sent_to_company': self._parse_date(complaint_data.get('date_sent_to_company')),
-                'company_public_response': complaint_data.get('company_public_response'),
-                'tags': complaint_data.get('tags'),
-                'state': complaint_data.get('state'),
-                'zip_code': complaint_data.get('zip_code'),
-                'geo_country': 'US',  # CFPB is US-only
-                'collected_at': datetime.utcnow().isoformat()
-            }
+                processed_complaints.append(complaint)
             
-            # Calculate severity score based on available indicators
-            processed['severity_score'] = self._calculate_severity_score(complaint_data)
-            
-            return processed
+            logger.info(f"Processed {len(processed_complaints)} complaints for target banks")
+            logger.info(f"All companies found: {sorted(list(all_companies))[:20]}")  # Show first 20
+            return processed_complaints
             
         except Exception as e:
-            logger.error(f"Error processing complaint {complaint_data.get('complaint_id', 'unknown')}: {e}")
-            return None
+            logger.error(f"Error fetching CFPB data: {e}")
+            return []
     
-    def _parse_date(self, date_string: Optional[str]) -> Optional[str]:
-        """Parse date string to ISO format"""
-        if not date_string:
-            return None
+    def _parse_date(self, date_str: str) -> str:
+        """Parse CFPB date format to ISO format"""
+        if not date_str:
+            return datetime.utcnow().isoformat() + 'Z'
+        
         try:
-            # CFPB dates are typically in YYYY-MM-DD format
-            dt = datetime.strptime(date_string, '%Y-%m-%d')
-            return dt.isoformat()
+            # CFPB typically uses YYYY-MM-DD format
+            dt = datetime.strptime(date_str, '%Y-%m-%d')
+            return dt.isoformat() + 'Z'
         except:
-            return date_string  # Return as-is if parsing fails
+            return datetime.utcnow().isoformat() + 'Z'
     
-    def _parse_boolean(self, value: Optional[str]) -> Optional[bool]:
-        """Parse string boolean values"""
-        if not value:
-            return None
-        return value.lower() in ['yes', 'true', '1']
+    def _build_complaint_text(self, source: Dict[str, Any]) -> str:
+        """Build complaint text from available fields"""
+        parts = []
+        
+        # Add issue information
+        if source.get('issue'):
+            parts.append(f"Issue: {source['issue']}")
+        
+        if source.get('sub_issue'):
+            parts.append(f"Sub-issue: {source['sub_issue']}")
+        
+        # Add complaint narrative if available
+        if source.get('consumer_complaint_narrative'):
+            parts.append(f"Complaint: {source['consumer_complaint_narrative']}")
+        
+        # Add product information
+        if source.get('product'):
+            parts.append(f"Product: {source['product']}")
+        
+        return ' | '.join(parts) if parts else f"CFPB complaint for {source.get('company', 'Unknown')}"
     
-    def _calculate_severity_score(self, complaint_data: Dict[str, Any]) -> float:
-        """Calculate a severity score (0-1) based on complaint characteristics"""
-        score = 0.0
-        
-        # Base score for having a complaint
-        score += 0.3
-        
-        # Higher severity for certain products
-        high_severity_products = ['mortgage', 'debt collection', 'credit reporting']
-        product = complaint_data.get('product', '').lower()
-        if any(hsp in product for hsp in high_severity_products):
-            score += 0.2
-        
-        # Consumer disputed adds severity
-        if complaint_data.get('consumer_disputed', '').lower() == 'yes':
-            score += 0.2
-        
-        # Untimely response adds severity
-        if complaint_data.get('timely_response', '').lower() != 'yes':
-            score += 0.1
-        
-        # Has narrative (consumer took time to write) adds severity
-        if complaint_data.get('consumer_complaint_narrative'):
-            score += 0.1
-        
-        # Public response suggests more serious complaint
-        if complaint_data.get('company_public_response'):
-            score += 0.1
-        
-        return min(score, 1.0)  # Cap at 1.0
+    def _generate_content_hash(self, complaint_id: str) -> str:
+        """Generate content hash for deduplication"""
+        return hashlib.sha256(complaint_id.encode('utf-8')).hexdigest()[:16]
     
-    def save_to_gcs(self, complaints: List[Dict[str, Any]], brand_id: str, date_str: str):
-        """Save complaints to GCS in NDJSON format for Fivetran"""
+    def save_to_gcs_partitioned(self, complaints: List[Dict[str, Any]], run_timestamp: str):
+        """Save complaints to GCS in partitioned format"""
         if not complaints:
-            logger.info(f"No complaints to save for brand {brand_id}")
-            return
+            logger.info("No complaints to save")
+            return []
+        
+        # Group by date
+        complaints_by_date = {}
+        for complaint in complaints:
+            event_date = complaint['ts_event'][:10]  # Extract YYYY-MM-DD
+            if event_date not in complaints_by_date:
+                complaints_by_date[event_date] = []
+            complaints_by_date[event_date].append(complaint)
+        
+        saved_files = []
+        
+        for date_str, date_complaints in complaints_by_date.items():
+            # Create filename
+            filename = f"raw/cfpb/dt={date_str}/part-{run_timestamp}-{hashlib.md5(date_str.encode()).hexdigest()[:8]}.jsonl.gz"
             
-        bucket = self.storage_client.bucket(BUCKET_NAME)
+            # Convert to JSONL
+            jsonl_content = '\n'.join(json.dumps(complaint) for complaint in date_complaints)
+            
+            # Upload to GCS with gzip compression
+            blob = self.bucket.blob(filename)
+            blob.upload_from_string(
+                jsonl_content,
+                content_type='application/gzip',
+                content_encoding='gzip'
+            )
+            
+            saved_files.append(filename)
+            logger.info(f"Saved {len(date_complaints)} complaints to gs://{GCS_BUCKET}/{filename}")
         
-        # Create path: raw/cfpb/date=YYYY-MM-DD/brand_id.ndjson
-        blob_path = f"raw/cfpb/date={date_str}/{brand_id}.ndjson"
-        blob = bucket.blob(blob_path)
-        
-        # Convert to newline-delimited JSON
-        ndjson_content = '\n'.join([json.dumps(complaint) for complaint in complaints])
-        
-        blob.upload_from_string(ndjson_content, content_type='application/x-ndjson')
-        logger.info(f"Saved {len(complaints)} complaints to gs://{BUCKET_NAME}/{blob_path}")
+        return saved_files
 
 @functions_framework.http
 def fetch_cfpb_data(request):
-    """Cloud Function entry point"""
+    """Cloud Function entry point for CFPB data fetching"""
+    
     try:
-        # Parse request parameters - handle both HTTP and Pub/Sub triggers
+        # Parse request
         request_json = request.get_json(silent=True) or {}
         
-        # Handle Pub/Sub message format
-        if 'message' in request_json:
-            import base64
-            message_data = request_json['message'].get('data', '')
-            if message_data:
-                try:
-                    decoded_data = base64.b64decode(message_data).decode('utf-8')
-                    request_json = json.loads(decoded_data)
-                    logger.info(f"Decoded Pub/Sub message: {request_json}")
-                except Exception as e:
-                    logger.warning(f"Failed to decode Pub/Sub message: {e}")
-                    request_json = {}
+        # Get parameters
+        since_date = request_json.get('since_date')  # YYYY-MM-DD format
+        limit = request_json.get('limit', 1000)
         
-        # Default to yesterday's data
-        target_date = request_json.get('date')
-        if not target_date:
-            yesterday = datetime.utcnow() - timedelta(days=1)
-            target_date = yesterday.strftime('%Y-%m-%d')
+        # Create run timestamp
+        run_timestamp = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
         
-        # CFPB date format for API query (look back 7 days to catch any delayed reports)
-        lookback_date = datetime.strptime(target_date, '%Y-%m-%d') - timedelta(days=7)
-        date_received_gte = lookback_date.strftime('%Y-%m-%d')
+        logger.info(f"Starting CFPB fetch - since_date: {since_date}, limit: {limit}")
         
+        # Initialize fetcher
         fetcher = CFPBFetcher()
         
-        # Fetch data for each brand
-        total_complaints = 0
-        for brand_id, company_names in FINANCIAL_COMPANIES.items():
-            complaints = fetcher.fetch_complaints(brand_id, company_names, date_received_gte)
-            fetcher.save_to_gcs(complaints, brand_id, target_date)
-            total_complaints += len(complaints)
+        # Fetch complaints
+        complaints = fetcher.fetch_cfpb_complaints(since_date=since_date, limit=limit)
         
-        return {
+        # Save to GCS
+        saved_files = fetcher.save_to_gcs_partitioned(complaints, run_timestamp)
+        
+        # Return results
+        result = {
             'status': 'success',
-            'date': target_date,
-            'lookback_date': date_received_gte,
-            'total_complaints': total_complaints,
-            'brands_processed': len(FINANCIAL_COMPANIES)
-        }, 200
+            'run_timestamp': run_timestamp,
+            'total_complaints': len(complaints),
+            'files_saved': len(saved_files),
+            'since_date': since_date,
+            'brands_found': list(set(c['brand_id'] for c in complaints))
+        }
+        
+        logger.info(f"CFPB fetch complete: {result}")
+        return result, 200
         
     except Exception as e:
         logger.error(f"Error in fetch_cfpb_data: {e}")
         return {'status': 'error', 'message': str(e)}, 500
 
-if __name__ == '__main__':
-    # For Cloud Run deployment
-    import os
-    from flask import Flask, request
+# Test function
+def test_cfpb_fetcher():
+    """Test the CFPB fetcher locally"""
     
-    app = Flask(__name__)
+    print("🧪 Testing CFPB Fetcher...")
     
-    @app.route('/', methods=['POST', 'GET'])
-    def handle_request():
-        return fetch_cfpb_data(request)
+    # Test brand mapping
+    fetcher = CFPBFetcher()
     
-    @app.route('/health', methods=['GET'])
-    def health_check():
-        return {'status': 'healthy'}, 200
+    test_companies = [
+        "BANK OF AMERICA, NATIONAL ASSOCIATION",
+        "JPMORGAN CHASE & CO.",
+        "WELLS FARGO & COMPANY",
+        "CITIBANK, N.A.",
+        "CAPITAL ONE FINANCIAL CORPORATION",
+        "TD BANK USA, NATIONAL ASSOCIATION",
+        "Random Bank Not In Our List"
+    ]
     
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    print("\n📋 Testing brand mapping:")
+    for company in test_companies:
+        brand_id = fetcher.get_brand_id_from_company(company)
+        status = "✅" if brand_id else "❌"
+        print(f"{status} {company} → {brand_id}")
+    
+    # Test API call (small sample)
+    print(f"\n🌐 Testing CFPB API call...")
+    complaints = fetcher.fetch_cfpb_complaints(limit=10)
+    
+    if complaints:
+        print(f"✅ Successfully fetched {len(complaints)} complaints")
+        
+        # Show sample
+        sample = complaints[0]
+        print(f"\n📄 Sample complaint:")
+        print(f"   Event ID: {sample['event_id']}")
+        print(f"   Brand: {sample['brand_id']}")
+        print(f"   Date: {sample['ts_event']}")
+        print(f"   Text: {sample['text'][:100]}...")
+        
+        # Show brand distribution
+        brands = {}
+        for c in complaints:
+            brands[c['brand_id']] = brands.get(c['brand_id'], 0) + 1
+        
+        print(f"\n📊 Brand distribution:")
+        for brand, count in brands.items():
+            print(f"   {brand}: {count}")
+    else:
+        print("❌ No complaints fetched")
+    
+    print(f"\n✅ CFPB Fetcher test complete!")
+
+if __name__ == "__main__":
+    test_cfpb_fetcher()

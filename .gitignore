@@ -1,4 +1,5 @@
 # Environment variables
+# TEMPORARILY COMMENTED OUT - Remember to uncomment before GitHub commit!
 .env
 .env.local
 .env.*.local
