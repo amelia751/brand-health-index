@@ -1,0 +1,24 @@
+# Brand Health Index - Consolidated Requirements
+# This file combines all dependencies needed for local development and testing
+
+# Core dependencies (from all cloud functions)
+functions-framework==3.4.0
+google-cloud-storage==2.10.0
+google-cloud-secret-manager==2.20.2
+requests==2.31.0
+flask==2.3.3
+
+# Data processing
+pandas==2.1.4
+numpy==1.26.4
+
+# API clients
+praw==7.7.1
+pytrends==4.9.2
+
+# DBT (for data transformation) - compatible with Python 3.10
+dbt-core>=1.5.0,<2.0.0
+dbt-bigquery>=1.5.0,<2.0.0
+
+# Development and testing
+python-dotenv==1.0.0
