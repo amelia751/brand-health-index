@@ -1,10 +1,10 @@
 version: 2
 
 sources:
-  - name: fivetran_raw
-    description: Raw data ingested by Fivetran from various APIs
+  - name: brand_health_raw
+    description: Raw data loaded into BigQuery from GCS
     database: "{{ env_var('DBT_GOOGLE_BIGQUERY_PROJECT') }}"
-    schema: fivetran_raw
+    schema: brand_health_raw
     
     tables:
       - name: twitter_posts
@@ -32,7 +32,7 @@ sources:
             tests:
               - not_null
               
-      - name: reddit_messages
+      - name: reddit_events
         description: Raw Reddit posts and comments data
         columns:
           - name: brand_id

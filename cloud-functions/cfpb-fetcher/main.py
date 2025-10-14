@@ -24,48 +24,17 @@ PROJECT_ID = os.environ.get('PROJECT_ID')
 GCS_BUCKET = os.environ.get('GCS_BUCKET', 'brand-health-raw-data')
 BQ_DATASET = os.environ.get('BQ_DATASET', 'brand_health_raw')
 
-# CFPB-specific company name mappings (based on ACTUAL CFPB API data)
+# CFPB-specific company name mappings - TD Bank focused
 CFPB_COMPANY_MAPPING = {
-    'chase': [
-        'JPMORGAN CHASE & CO.'
-    ],
-    'bank_of_america': [
-        'BANK OF AMERICA, NATIONAL ASSOCIATION'
-    ],
-    'wells_fargo': [
-        'WELLS FARGO & COMPANY'
-    ],
-    'capital_one': [
-        'CAPITAL ONE FINANCIAL CORPORATION'
-    ],
-    'citibank': [
-        'CITIBANK, N.A.'
-    ],
-    'pnc': [
-        'PNC Bank N.A.'
-    ],
-    'santander': [
-        'SANTANDER BANK, NATIONAL ASSOCIATION',
-        'SANTANDER HOLDINGS USA, INC.'
-    ],
-    # These need to be verified with more CFPB data
     'td_bank': [
-        'TD BANK USA, NATIONAL ASSOCIATION'
-    ],
-    'citizens_bank': [
-        'CITIZENS BANK, NATIONAL ASSOCIATION'
-    ],
-    'mt_bank': [
-        'M&T BANK CORPORATION'
-    ],
-    'keybank': [
-        'KEYBANK NATIONAL ASSOCIATION'
-    ],
-    'regions_bank': [
-        'REGIONS BANK'
-    ],
-    'truist': [
-        'TRUIST BANK'
+        # Official CFPB names for TD Bank
+        'TD BANK USA, NATIONAL ASSOCIATION',
+        'TD BANK, N.A.',
+        'TD BANK US HOLDING COMPANY',
+        'TORONTO-DOMINION BANK',
+        'TD AUTO FINANCE LLC',
+        'TD AMERITRADE, INC.',
+        'TD AMERITRADE CLEARING, INC.'
     ]
 }
 
@@ -112,16 +81,16 @@ class CFPBFetcher:
         logger.info(f"Fetching CFPB complaints since {since_date}")
         
         # Build API parameters (CFPB API format)
-        params = {
+                params = {
             'date_received_min': since_date,
             'size': limit
         }
         
         try:
             response = requests.get(CFPB_API_BASE, params=params, timeout=30)
-            response.raise_for_status()
-            
-            data = response.json()
+                response.raise_for_status()
+                
+                data = response.json()
             hits = data.get('hits', {}).get('hits', [])
             
             logger.info(f"Retrieved {len(hits)} complaints from CFPB API")
@@ -146,13 +115,13 @@ class CFPBFetcher:
                 
                 # Only include complaints for our target banks
                 if not brand_id:
-                    continue
-                
+                continue
+        
                 # Create standardized record
                 complaint = {
                     'event_id': f"cfpb_{source.get('complaint_id', '')}",
                     'ts_event': self._parse_date(source.get('date_received')),
-                    'brand_id': brand_id,
+                'brand_id': brand_id,
                     'source': 'cfpb',
                     'geo_country': 'US',
                     'text': self._build_complaint_text(source),

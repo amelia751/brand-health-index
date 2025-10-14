@@ -3,6 +3,7 @@ google-cloud-storage==2.10.0
 google-cloud-secret-manager==2.16.4
 google-cloud-bigquery==3.11.4
 google-cloud-aiplatform==1.36.4
+cloudevents==1.10.1
 praw==7.7.1
 flask==2.3.3
 requests==2.31.0
