@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ComplaintDetail, getComplaintDetails, ComplaintCluster, getComplaintClusters } from '@/lib/bigquery';
+import { ComplaintDetail, getComplaintDetails, ComplaintCluster, getComplaintClusters, PaginatedComplaintsResponse } from '@/lib/bigquery';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
+import { Pagination, PaginationContent, PaginationEllipsis, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from '@/components/ui/pagination';
 import { MessageSquare, Calendar, AlertTriangle, ChevronDown, ChevronUp, Filter } from 'lucide-react';
 import { format, parseISO, isValid } from 'date-fns';
 
@@ -15,6 +17,14 @@ export default function ComplaintsPage() {
   const [selectedCluster, setSelectedCluster] = useState<string>('all');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: 50,
+    totalCount: 0,
+    totalPages: 0,
+    hasNextPage: false,
+    hasPreviousPage: false
+  });
 
   // Helper function to safely parse dates from BigQuery
   const parseDate = (dateValue: any): string => {
@@ -66,8 +76,9 @@ export default function ComplaintsPage() {
     async function loadComplaints() {
       setLoading(true);
       try {
-        const complaintsData = await getComplaintDetails(selectedCluster);
-        setComplaints(complaintsData);
+        const response = await getComplaintDetails(selectedCluster, pagination.page, pagination.pageSize);
+        setComplaints(response.complaints);
+        setPagination(response.pagination);
       } catch (error) {
         console.error('Error loading complaints:', error);
       } finally {
@@ -76,6 +87,13 @@ export default function ComplaintsPage() {
     }
 
     loadComplaints();
+  }, [selectedCluster, pagination.page]);
+
+  // Reset to page 1 when cluster changes
+  useEffect(() => {
+    if (pagination.page !== 1) {
+      setPagination(prev => ({ ...prev, page: 1 }));
+    }
   }, [selectedCluster]);
 
   const toggleExpanded = (id: string) => {
@@ -122,6 +140,18 @@ export default function ComplaintsPage() {
     low: complaints.filter(c => c.severity_level === 'low').length,
   };
 
+  const handlePageChange = (newPage: number) => {
+    setPagination(prev => ({ ...prev, page: newPage }));
+  };
+
+  const handlePageSizeChange = (newPageSize: string) => {
+    setPagination(prev => ({ 
+      ...prev, 
+      page: 1, // Reset to first page when changing page size
+      pageSize: parseInt(newPageSize) 
+    }));
+  };
+
   if (loading) {
     return (
       <div className="p-6">
@@ -148,83 +178,72 @@ export default function ComplaintsPage() {
         </p>
       </div>
 
-      {/* Stats Bar */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <div className="text-3xl font-bold text-gray-900">{complaints.length}</div>
-              <div className="text-sm text-gray-500 mt-1">Total Complaints</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <div className="text-3xl font-bold text-red-600">{severityCounts.high}</div>
-              <div className="text-sm text-gray-500 mt-1">High Priority</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <div className="text-3xl font-bold text-yellow-600">{severityCounts.medium}</div>
-              <div className="text-sm text-gray-500 mt-1">Medium Priority</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <div className="text-3xl font-bold text-gray-600">{severityCounts.low}</div>
-              <div className="text-sm text-gray-500 mt-1">Low Priority</div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
 
       {/* Filter Section */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex items-center space-x-4">
-            <Filter className="h-5 w-5 text-gray-500" />
-            <div className="flex-1">
-              <label className="text-sm font-medium text-gray-700 mb-2 block">
-                Filter by Cluster
-              </label>
-              <Select value={selectedCluster} onValueChange={setSelectedCluster}>
-                <SelectTrigger className="w-full md:w-96">
-                  <SelectValue placeholder="Select a cluster" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Clusters</SelectItem>
-                  {clusters.map(cluster => (
-                    <SelectItem key={cluster.cluster_name} value={cluster.cluster_name}>
-                      <div className="flex items-center justify-between w-full">
-                        <span className="capitalize">
-                          {cluster.cluster_name.replace(/_/g, ' ')}
-                        </span>
-                        <span className="text-xs text-gray-500 ml-4">
-                          ({cluster.total_complaints})
-                        </span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="flex flex-col sm:flex-row sm:items-end gap-4 p-4 bg-gray-50 rounded-lg border">
+        <div className="flex items-center gap-2">
+          <Filter className="h-4 w-4 text-gray-500" />
+          <span className="text-sm font-medium text-gray-700">Filters:</span>
+        </div>
+        <div className="flex-1">
+          <label className="text-sm font-medium text-gray-700 mb-1 block">
+            Cluster
+          </label>
+          <Select value={selectedCluster} onValueChange={setSelectedCluster}>
+            <SelectTrigger className="w-full sm:w-80">
+              <SelectValue placeholder="Select a cluster" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Clusters ({pagination.totalCount.toLocaleString()})</SelectItem>
+              {clusters.map(cluster => (
+                <SelectItem key={cluster.cluster_name} value={cluster.cluster_name}>
+                  <div className="flex items-center justify-between w-full">
+                    <span className="capitalize">
+                      {cluster.cluster_name.replace(/_/g, ' ')}
+                    </span>
+                    <span className="text-xs text-gray-500 ml-4">
+                      ({cluster.total_complaints})
+                    </span>
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="text-sm font-medium text-gray-700 mb-1 block">
+            Per Page
+          </label>
+          <Select value={pagination.pageSize.toString()} onValueChange={handlePageSizeChange}>
+            <SelectTrigger className="w-20">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="25">25</SelectItem>
+              <SelectItem value="50">50</SelectItem>
+              <SelectItem value="100">100</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
 
       {/* Complaints List */}
       <Card>
         <CardHeader>
           <CardTitle>
-            {selectedCluster === 'all'
-              ? 'All Complaints'
-              : `${selectedCluster.replace(/_/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')} Complaints`}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <MessageSquare className="h-5 w-5" />
+                <span>
+                  {selectedCluster === 'all'
+                    ? 'All Complaints'
+                    : `${selectedCluster.replace(/_/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')} Complaints`}
+                </span>
+              </div>
+              <div className="text-sm font-normal text-gray-500">
+                {pagination.totalCount.toLocaleString()} total
+              </div>
+            </div>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -322,6 +341,84 @@ export default function ComplaintsPage() {
                 </div>
               );
             })
+          )}
+          
+          {/* Pagination Controls */}
+          {pagination.totalPages > 1 && (
+            <div className="mt-6 pt-6 border-t">
+              <div className="flex flex-col sm:flex-row justify-between items-center space-y-4 sm:space-y-0">
+                <div className="text-sm text-gray-500">
+                  Showing {((pagination.page - 1) * pagination.pageSize) + 1} to{' '}
+                  {Math.min(pagination.page * pagination.pageSize, pagination.totalCount)} of{' '}
+                  {pagination.totalCount.toLocaleString()} complaints
+                </div>
+                
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious 
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (pagination.hasPreviousPage) {
+                            handlePageChange(pagination.page - 1);
+                          }
+                        }}
+                        className={!pagination.hasPreviousPage ? 'pointer-events-none opacity-50' : ''}
+                      />
+                    </PaginationItem>
+                    
+                    {/* Page Numbers */}
+                    {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (pagination.totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (pagination.page <= 3) {
+                        pageNum = i + 1;
+                      } else if (pagination.page >= pagination.totalPages - 2) {
+                        pageNum = pagination.totalPages - 4 + i;
+                      } else {
+                        pageNum = pagination.page - 2 + i;
+                      }
+                      
+                      return (
+                        <PaginationItem key={pageNum}>
+                          <PaginationLink
+                            href="#"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              handlePageChange(pageNum);
+                            }}
+                            isActive={pageNum === pagination.page}
+                          >
+                            {pageNum}
+                          </PaginationLink>
+                        </PaginationItem>
+                      );
+                    })}
+                    
+                    {pagination.totalPages > 5 && pagination.page < pagination.totalPages - 2 && (
+                      <PaginationItem>
+                        <PaginationEllipsis />
+                      </PaginationItem>
+                    )}
+                    
+                    <PaginationItem>
+                      <PaginationNext 
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (pagination.hasNextPage) {
+                            handlePageChange(pagination.page + 1);
+                          }
+                        }}
+                        className={!pagination.hasNextPage ? 'pointer-events-none opacity-50' : ''}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>

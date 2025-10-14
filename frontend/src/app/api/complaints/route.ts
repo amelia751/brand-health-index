@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { queryComplaintDetails } from '@/lib/bigquery-server';
+import { queryComplaintDetails, queryComplaintCount } from '@/lib/bigquery-server';
 
 // Mock data for complaints with full text
 const mockComplaints = [
@@ -119,13 +119,37 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const cluster = searchParams.get('cluster');
+    const page = parseInt(searchParams.get('page') || '1');
+    const pageSize = parseInt(searchParams.get('pageSize') || '50');
 
     // Try to fetch real BigQuery data first
     try {
       console.log('Attempting to fetch real BigQuery complaints data...');
-      const rows = await queryComplaintDetails(cluster || undefined);
-      console.log(`Successfully fetched ${rows.length} complaint records from BigQuery`);
-      return NextResponse.json(rows);
+      
+      // Get both the complaints and total count
+      const [complaints, totalCount] = await Promise.all([
+        queryComplaintDetails(
+          cluster || undefined, 
+          undefined, // dateRange
+          { page, pageSize }
+        ),
+        queryComplaintCount(cluster || undefined)
+      ]);
+      
+      console.log(`Successfully fetched ${complaints.length} complaint records from BigQuery (page ${page})`);
+      
+      // Return paginated response
+      return NextResponse.json({
+        complaints,
+        pagination: {
+          page,
+          pageSize,
+          totalCount,
+          totalPages: Math.ceil(totalCount / pageSize),
+          hasNextPage: page < Math.ceil(totalCount / pageSize),
+          hasPreviousPage: page > 1
+        }
+      });
     } catch (bigqueryError) {
       console.warn('BigQuery complaints fetch failed, falling back to mock data:', bigqueryError);
       
@@ -134,7 +158,23 @@ export async function GET(request: Request) {
       if (cluster && cluster !== 'all') {
         filteredComplaints = mockComplaints.filter(c => c.cluster_name === cluster);
       }
-      return NextResponse.json(filteredComplaints);
+      
+      // Mock pagination for fallback
+      const startIndex = (page - 1) * pageSize;
+      const endIndex = startIndex + pageSize;
+      const paginatedComplaints = filteredComplaints.slice(startIndex, endIndex);
+      
+      return NextResponse.json({
+        complaints: paginatedComplaints,
+        pagination: {
+          page,
+          pageSize,
+          totalCount: filteredComplaints.length,
+          totalPages: Math.ceil(filteredComplaints.length / pageSize),
+          hasNextPage: page < Math.ceil(filteredComplaints.length / pageSize),
+          hasPreviousPage: page > 1
+        }
+      });
     }
   } catch (error) {
     console.error('Error fetching complaints data:', error);
