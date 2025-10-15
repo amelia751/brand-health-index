@@ -34,12 +34,18 @@ TD_BANK_TERMS = [
     '@TDBank_US', 
     '@TDBank', 
     'Toronto-Dominion',
-    'TD Canada Trust',
     'TD Ameritrade',
     'TD Securities',
     'TD Wealth',
     'TD Insurance',
-    'TD Direct Investing'
+    'TD Direct Investing',
+    'TDBank',
+    'Toronto Dominion',
+    'TD EasyWeb',
+    'TD Mobile App',
+    'TD Bank US',
+    'TD Credit Card',
+    'TD Mortgage'
 ]
 
 class TwitterAPITester:
@@ -178,23 +184,71 @@ class TwitterAPITester:
         logger.info(f"✅ Fetched {len(all_tweets)} TD Bank tweets total")
         return all_tweets
     
-    def save_tweets_locally(self, tweets: List[Dict[str, Any]], date_str: str):
-        """Save tweets to local JSON files"""
+    def save_tweets_locally(self, tweets: List[Dict[str, Any]], date_str: str) -> int:
+        """Save tweets to local JSON files and append to master file"""
         if not tweets:
             logger.info("No TD Bank tweets to save")
-            return
+            return 0
             
         # Create date directory
         date_dir = self.output_dir / f"date={date_str}"
         date_dir.mkdir(exist_ok=True)
         
-        # Save as JSON file
+        # Save as JSON file for this specific date
         output_file = date_dir / "td_bank_tweets.json"
         
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(tweets, f, indent=2, ensure_ascii=False)
         
         logger.info(f"💾 Saved {len(tweets)} TD Bank tweets to {output_file}")
+        
+        # Append to master file and return count of new unique tweets
+        return self.append_to_master_file(tweets)
+    
+    def append_to_master_file(self, new_tweets: List[Dict[str, Any]]) -> int:
+        """Append new tweets to the master file, avoiding duplicates"""
+        # Use the twitter_daily_data directory for the master file
+        master_file = Path("twitter_daily_data") / "td_bank_tweets_master.json"
+        
+        # Load existing tweets
+        existing_tweets = []
+        if master_file.exists():
+            try:
+                with open(master_file, 'r', encoding='utf-8') as f:
+                    existing_tweets = json.load(f)
+                logger.info(f"📂 Loaded {len(existing_tweets)} existing tweets from master file")
+            except (json.JSONDecodeError, FileNotFoundError) as e:
+                logger.warning(f"⚠️ Could not load existing master file: {e}")
+                existing_tweets = []
+        
+        # Get existing tweet IDs to avoid duplicates
+        existing_tweet_ids = {tweet['tweet_id'] for tweet in existing_tweets}
+        
+        # Filter out duplicates
+        unique_new_tweets = [
+            tweet for tweet in new_tweets 
+            if tweet['tweet_id'] not in existing_tweet_ids
+        ]
+        
+        if not unique_new_tweets:
+            logger.info("🔄 No new unique tweets to append to master file")
+            return 0
+        
+        # Append new tweets to existing ones
+        all_tweets = existing_tweets + unique_new_tweets
+        
+        # Sort by timestamp (newest first)
+        all_tweets.sort(key=lambda x: x['ts_event'], reverse=True)
+        
+        # Save updated master file
+        with open(master_file, 'w', encoding='utf-8') as f:
+            json.dump(all_tweets, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"✅ Appended {len(unique_new_tweets)} new tweets to master file")
+        logger.info(f"📊 Master file now contains {len(all_tweets)} total tweets")
+        logger.info(f"💾 Master file saved to {master_file}")
+        
+        return len(unique_new_tweets)
     
     def save_summary_report(self, results: Dict[str, Any], date_str: str):
         """Save a summary report of the test results"""
@@ -231,6 +285,7 @@ class TwitterAPITester:
             'target_date': date_str,
             'search_terms': TD_BANK_TERMS,
             'total_tweets': 0,
+            'new_unique_tweets': 0,
             'status': 'pending'
         }
         
@@ -239,8 +294,9 @@ class TwitterAPITester:
             tweets = self.fetch_tweets(since_time, max_tweets)
             
             if tweets:
-                self.save_tweets_locally(tweets, date_str)
+                new_unique_count = self.save_tweets_locally(tweets, date_str)
                 results['total_tweets'] = len(tweets)
+                results['new_unique_tweets'] = new_unique_count
                 results['status'] = 'success'
                 
                 # Log sample tweets
@@ -263,7 +319,8 @@ class TwitterAPITester:
         # Print final results
         logger.info("\n" + "=" * 50)
         logger.info("📊 TD Bank Test Results:")
-        logger.info(f"   📝 Total tweets collected: {results['total_tweets']}")
+        logger.info(f"   📝 Total tweets fetched: {results['total_tweets']}")
+        logger.info(f"   🆕 New unique tweets added: {results['new_unique_tweets']}")
         logger.info(f"   📁 Data saved to: {self.output_dir}")
         logger.info(f"   🎯 Search terms used: {len(TD_BANK_TERMS)} terms")
         
